@@ -7,6 +7,8 @@ import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Embedding, SpatialDropout1D, Conv1D, MaxPooling1D, LSTM, Dense, Dropout
 from tensorflow.keras.preprocessing.sequence import pad_sequences
+import pandas as pd
+import random
 
 app = FastAPI()
 
@@ -17,10 +19,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- LOAD DATASET ---
+try:
+    df_anime = pd.read_csv('animes.csv')
+    df_anime['score'] = pd.to_numeric(df_anime['score'], errors='coerce')
+    df_anime = df_anime.dropna(subset=['score'])    
+    print(f"✅ Dataset dimuat: {len(df_anime)} anime tersedia.")
+except Exception as e:
+    print(f"⚠️ Gagal memuat dataset: {e}")
+    df_anime = pd.DataFrame([{"title": "Data Not Found", "score": 0, "genre": "None"}])
+
 def build_and_load_model():
     print("Membangun ulang struktur The Muscle...")
     model = Sequential([
-        # Kita tambahkan input_shape di sini agar model langsung "terbentuk"
         Embedding(input_dim=15000, output_dim=64, input_length=150),
         SpatialDropout1D(0.2),
         Conv1D(filters=128, kernel_size=5, activation='relu'),
@@ -32,17 +43,12 @@ def build_and_load_model():
         Dense(1, activation='linear')
     ])
     
-    # --- JURUS PEMANASAN ---
-    # Kita panggil build() secara manual agar model siap menerima bobot
     model.build(input_shape=(None, 150)) 
     
     try:
-        # Sekarang suntikkan bobotnya
         model.load_weights('anime_weights.weights.h5')
-        
         with open('tokenizer.pkl', 'rb') as handle:
             tokenizer = pickle.load(handle)
-            
         print("✅ KONFIRMASI: Struktur Terbentuk & Bobot Disuntikkan! AI Siap.")
         return model, tokenizer
     except Exception as e:
@@ -56,20 +62,73 @@ class SearchQuery(BaseModel):
 
 @app.post("/api/recommend")
 async def get_recommendations(request: SearchQuery):
-    if model is None: return {"error": "Model tidak siap"}
-    
-    # Preprocessing (maxlen 150 sesuai log error sebelumnya)
+    if model is None or tokenizer is None:
+        return {"error": "Model belum siap"}
+
+    # 1. Prediksi Skor AI
     sequences = tokenizer.texts_to_sequences([request.query])
-    padded = pad_sequences(sequences, maxlen=150)
-    
-    # Prediksi
+    padded = pad_sequences(sequences, maxlen=150) 
     prediction = model.predict(padded)
-    score = float(np.round(prediction[0][0] * 10, 2))
+    final_score = max(0, min(float(prediction[0][0]) * 10, 10.0))
+
+    # 2. FILTER GENRE & SINONIM
+    keywords = request.query.lower().split()
+    synonyms = {
+        "jantan": ["shounen", "action", "military", "super power"],
+        "cowok": ["shounen", "seinen"],
+        "sedih": ["drama", "romance", "slice of life"],
+        "serem": ["horror", "supernatural", "thriller"],
+        "lucu": ["comedy", "parody"],
+        "santai": ["slice of life", "iyashikei", "school"]
+    }
+
+    expanded_keywords = list(keywords)
+    for word in keywords:
+        if word in synonyms:
+            expanded_keywords.extend(synonyms[word])
     
-    return [
-        {"id": 1, "title": f"Rekomendasi Utama: {request.query}", "score": min(score, 10.0), "genre": "AI Prediction Result"},
-        {"id": 2, "title": "Gintama (Simulated)", "score": 9.5, "genre": "Action, Comedy"},
-    ]
+    def is_genre_match(row_genre):
+        if not isinstance(row_genre, str): return False
+        return any(word in row_genre.lower() for word in expanded_keywords)
+
+    mask = df_anime['genre'].apply(is_genre_match)
+    df_filtered = df_anime[mask].copy()
+
+    if df_filtered.empty:
+        df_filtered = df_anime.copy()
+
+    # 3. LOGIKA RANDOMIZER (The Wildcard)
+    df_filtered['diff'] = (df_filtered['score'] - final_score).abs()
+    
+    # Kita ambil 30 kandidat terbaik, lalu acak 3 diantaranya
+    # Ini supaya hasil tidak kaku dan user bisa menemukan hidden gems
+    candidates = (
+        df_filtered.sort_values('diff')
+        .drop_duplicates(subset=['title']) 
+        .head(30) 
+    )
+    
+    recommendations = candidates.sample(min(3, len(candidates)))
+
+    results = []
+    for i, row in recommendations.iterrows():
+        # Merapikan tampilan genre (buang bracket dan petik)
+        genre_clean = row['genre']
+        if isinstance(genre_clean, str):
+            genre_clean = genre_clean.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
+
+        results.append({
+            "id": int(i),
+            "title": row['title'],
+            "score": float(row['score']),
+            "genre": genre_clean,
+            "img_url": row['img_url'], 
+            "synopsis": row['synopsis'] if isinstance(row['synopsis'], str) else "No synopsis available.",
+            "ai_match": round(final_score, 2)
+        })
+
+    print(f"Vibe: {request.query} | Target Score: {final_score} | Got: {[r['title'] for r in results]}")
+    return results
 
 if __name__ == "__main__":
     import uvicorn

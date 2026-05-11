@@ -5,29 +5,58 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [results, setResults] = useState([]);
 
-  // Data palsu meniru output model AI kamu yang super akurat
-  const dummyResults = [
-    { id: 1, title: "Gintama'", score: 9.38, genre: "Action, Comedy, Sci-Fi" },
-    { id: 2, title: "Kimi no Na wa.", score: 9.20, genre: "Drama, Romance, Supernatural" },
-    { id: 3, title: "Koe no Katachi", score: 9.15, genre: "Drama, School, Shounen" },
-  ];
-
-  const handleSearch = (e) => {
-    e.preventDefault();
-    if (!query) return;
+  // Fungsi Pencarian Utama
+  const handleSearch = async (e, customQuery = null) => {
+    // Jika dipicu tombol Jelajahi (form submit), cegah refresh halaman
+    if (e) e.preventDefault();
+    
+    const searchQuery = customQuery || query;
+    if (!searchQuery) return;
     
     setIsLoading(true);
-    setResults([]); // Kosongkan hasil sebelumnya
+    setResults([]); 
 
-    // Simulasi waktu AI berpikir selama 1.5 detik
-    setTimeout(() => {
-      setResults(dummyResults);
+    try {
+      const response = await fetch('http://127.0.0.1:8000/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: searchQuery }),
+      });
+
+      if (!response.ok) throw new Error('Network response was not ok');
+
+      const data = await response.json();
+      setResults(data);
+    } catch (error) {
+      console.error("Gagal menghubungi AI:", error);
+      alert("Backend belum nyala atau ada error!");
+    } finally {
       setIsLoading(false);
-    }, 1500);
+    }
   };
 
+  // Fungsi Surprise Me - Harus ditaruh SEBELUM return
+  const handleSurpriseMe = () => {
+    const vibes = [
+      "Anime underrated yang seru banget",
+      "Isekai aneh tapi menarik",
+      "Horror yang bikin gak bisa tidur",
+      "Kisah cinta segitiga yang rumit",
+      "Pertarungan robot raksasa di luar angkasa",
+      "Vibe sore hari yang tenang dan damai",
+      "Anime jantan banget",
+      "Romance yang bikin nangis"
+    ];
+    const randomVibe = vibes[Math.floor(Math.random() * vibes.length)];
+    setQuery(randomVibe);
+    
+    // Langsung jalankan pencarian dengan query baru tersebut
+    handleSearch(null, randomVibe);
+  };
+
+  // UI ditaruh paling bawah dalam fungsi App
   return (
-    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans selection:bg-blue-500 selection:text-white pb-20">
+    <div className="min-h-screen bg-[#0f172a] text-slate-200 font-sans pb-20">
       
       {/* Header Section */}
       <header className="pt-20 pb-12 px-4 text-center">
@@ -47,15 +76,29 @@ function App() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Contoh: Action comedy yang bikin ngakak..."
-            className="w-full bg-slate-800/50 border border-slate-700 rounded-full py-4 pl-6 pr-32 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all shadow-lg"
+            className="w-full bg-slate-800/50 border border-slate-700 rounded-full py-4 pl-6 pr-44 text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all shadow-lg"
           />
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="absolute right-2 px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-full transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isLoading ? 'Mencari...' : 'Jelajahi'}
-          </button>
+          
+          <div className="absolute right-2 flex items-center gap-2">
+            {/* Tombol Dadu */}
+            <button
+              type="button"
+              onClick={handleSurpriseMe}
+              className="p-2.5 text-2xl hover:scale-125 transition-transform"
+              title="Surprise Me"
+            >
+              🎲
+            </button>
+            
+            {/* Tombol Jelajahi */}
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-full transition-all disabled:opacity-50"
+            >
+              {isLoading ? 'Mencari...' : 'Jelajahi'}
+            </button>
+          </div>
         </form>
 
         {/* Loading State */}
@@ -65,44 +108,38 @@ function App() {
           </div>
         )}
 
-        {/* Results Grid - Dibuat lega dan tidak saling berdempetan */}
+        {/* Results Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           {results.map((anime) => (
-            <div 
-              key={anime.id} 
-              className="bg-slate-800/40 rounded-2xl p-5 border border-slate-700/50 hover:bg-slate-800/80 transition-colors group flex flex-col"
-            >
-              {/* Placeholder gambar cover (pakai gradien CSS biar elegan) */}
-              <div className="h-48 w-full rounded-xl bg-gradient-to-br from-slate-700 to-slate-800 mb-4 flex items-center justify-center shadow-inner">
-                <span className="text-slate-500 font-medium">Cover Image</span>
+            <div key={anime.id} className="bg-slate-800/40 rounded-2xl p-5 border border-slate-700/50 hover:bg-slate-800/80 transition-all group flex flex-col shadow-xl">
+              <div className="h-72 w-full rounded-xl bg-slate-700 mb-4 overflow-hidden relative shadow-inner">
+                {anime.img_url ? (
+                  <img src={anime.img_url} alt={anime.title} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" onError={(e) => { e.target.src = 'https://via.placeholder.com/400x600?text=No+Image'; }} />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-slate-500">No Image</div>
+                )}
+                <div className="absolute top-2 right-2 bg-blue-600/90 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-md">
+                  Ranked: {anime.score}
+                </div>
               </div>
               
-              <h3 className="text-xl font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">
-                {anime.title}
-              </h3>
-              <p className="text-sm text-slate-400 mb-4 flex-grow">
-                {anime.genre}
-              </p>
+              <h3 className="text-lg font-bold text-white mb-1 group-hover:text-blue-400 transition-colors line-clamp-1">{anime.title}</h3>
+              <p className="text-[10px] uppercase tracking-widest text-blue-400 font-bold mb-2">{anime.genre}</p>
+              <p className="text-xs text-slate-400 mb-4 line-clamp-3 italic leading-relaxed">{anime.synopsis || "No synopsis available."}</p>
               
-              {/* Score Bar */}
-              <div className="mt-auto">
+              <div className="mt-auto pt-4 border-t border-slate-700/50">
                 <div className="flex justify-between items-end mb-1">
-                  <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">AI Prediksi</span>
+                  <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">AI Confidence</span>
                   <span className="text-lg font-bold text-emerald-400">{anime.score}</span>
                 </div>
-                {/* Visualisasi skor dalam bentuk bar */}
-                <div className="w-full bg-slate-700 rounded-full h-2">
-                  <div 
-                    className="bg-emerald-400 h-2 rounded-full" 
-                    style={{ width: `${(anime.score / 10) * 100}%` }}
-                  ></div>
+                <div className="w-full bg-slate-700 rounded-full h-1.5">
+                  <div className="bg-gradient-to-r from-emerald-500 to-emerald-300 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${(anime.score / 10) * 100}%` }}></div>
                 </div>
               </div>
             </div>
           ))}
         </div>
       </main>
-
     </div>
   );
 }
