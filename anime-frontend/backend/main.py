@@ -30,7 +30,6 @@ except Exception as e:
     df_anime = pd.DataFrame([{"title": "Data Not Found", "score": 0, "genre": "None"}])
 
 def build_and_load_model():
-    print("Membangun ulang struktur The Muscle...")
     model = Sequential([
         Embedding(input_dim=15000, output_dim=64, input_length=150),
         SpatialDropout1D(0.2),
@@ -42,118 +41,97 @@ def build_and_load_model():
         Dropout(0.4),
         Dense(1, activation='linear')
     ])
-    
     model.build(input_shape=(None, 150)) 
-    
     try:
         model.load_weights('anime_weights.weights.h5')
         with open('tokenizer.pkl', 'rb') as handle:
             tokenizer = pickle.load(handle)
-        print("✅ KONFIRMASI: Struktur Terbentuk & Bobot Disuntikkan! AI Siap.")
+        print("✅ AI Siap: Bobot disuntikkan.")
         return model, tokenizer
     except Exception as e:
-        print(f"❌ Gagal menyuntikkan bobot: {e}")
+        print(f"❌ Gagal load model: {e}")
         return None, None
 
 model, tokenizer = build_and_load_model()
 
 class SearchQuery(BaseModel):
     query: str
+    algo: str = "hybrid"
 
-# --- ENDPOINT 1: REKOMENDASI AI ---
+# --- ENDPOINT 1: REKOMENDASI ---
 @app.post("/api/recommend")
 async def get_recommendations(request: SearchQuery):
     if model is None or tokenizer is None:
         return {"error": "Model belum siap"}
 
-    sequences = tokenizer.texts_to_sequences([request.query])
-    padded = pad_sequences(sequences, maxlen=150) 
-    prediction = model.predict(padded)
-    final_score = max(0, min(float(prediction[0][0]) * 10, 10.0))
-
+    # Filter Genre & Sinonim
     keywords = request.query.lower().split()
     synonyms = {
-        "jantan": ["shounen", "action", "military", "super power"],
+        "crying": ["drama", "romance", "slice of life"],
+        "hard": ["drama", "thriller", "action"],
+        "fight": ["action", "martial arts", "shounen"],
+        "scary": ["horror", "thriller", "supernatural"],
+        "jantan": ["shounen", "action", "military"],
         "cowok": ["shounen", "seinen"],
-        "sedih": ["drama", "romance", "slice of life"],
-        "serem": ["horror", "supernatural", "thriller"],
-        "lucu": ["comedy", "parody"],
-        "santai": ["slice of life", "iyashikei", "school"]
+        "sedih": ["drama", "romance"],
+        "serem": ["horror", "thriller"],
+        "lucu": ["comedy"],
+        "santai": ["slice of life", "iyashikei"]
     }
-
-    expanded_keywords = list(keywords)
-    for word in keywords:
-        if word in synonyms:
-            expanded_keywords.extend(synonyms[word])
+    expanded = list(keywords)
+    for w in keywords:
+        if w in synonyms: expanded.extend(synonyms[w])
     
-    def is_genre_match(row_genre):
-        if not isinstance(row_genre, str): return False
-        return any(word in row_genre.lower() for word in expanded_keywords)
-
-    mask = df_anime['genre'].apply(is_genre_match)
+    mask = df_anime['genre'].apply(lambda x: any(word in str(x).lower() for word in expanded) if pd.notna(x) else False)
     df_filtered = df_anime[mask].copy()
+    if df_filtered.empty: df_filtered = df_anime.copy()
 
-    if df_filtered.empty:
-        df_filtered = df_anime.copy()
+    # Pemilihan Algoritma
+    if request.algo == "top_rated":
+        candidates = df_filtered.sort_values('score', ascending=False).drop_duplicates(subset=['title']).head(30)
+        ai_match_val = "N/A (Rating)"
+    else:
+        seq = tokenizer.texts_to_sequences([request.query])
+        padded = pad_sequences(seq, maxlen=150) 
+        pred = model.predict(padded)
+        final_score = max(0, min(float(pred[0][0]) * 10, 10.0))
+        ai_match_val = round(final_score, 2)
+        df_filtered['diff'] = (df_filtered['score'] - final_score).abs()
+        candidates = df_filtered.sort_values('diff').drop_duplicates(subset=['title']).head(30)
 
-    df_filtered['diff'] = (df_filtered['score'] - final_score).abs()
-    
-    candidates = (
-        df_filtered.sort_values('diff')
-        .drop_duplicates(subset=['title']) 
-        .head(30) 
-    )
-    
-    recommendations = candidates.sample(min(3, len(candidates)))
-
+    recommendations = candidates.sample(min(4, len(candidates)))
     results = []
     for i, row in recommendations.iterrows():
-        genre_clean = row['genre']
-        if isinstance(genre_clean, str):
-            genre_clean = genre_clean.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
-
+        genre = str(row['genre']).replace("[", "").replace("]", "").replace("'", "")
         results.append({
-            "id": int(i),
-            "title": row['title'],
-            "score": float(row['score']),
-            "genre": genre_clean,
-            "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None, 
-            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis available.",
-            "ai_match": round(final_score, 2)
+            "id": int(i), "title": row['title'], "score": float(row['score']),
+            "genre": genre, "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None,
+            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis.",
+            "ai_match": ai_match_val
         })
-
+    # PAKSA PRINT DI SINI (Pastikan indentasinya sejajar dengan 'return')
+    print("\n" + "="*30)
+    print(f"ALGO USED   : {request.algo}")
+    print(f"QUERY       : {request.query}")
+    print(f"AI MATCH SC : {ai_match_val}")
+    print(f"TOP RESULTS : {[r['title'] for r in results]}")
+    print("="*30 + "\n")
     return results
 
-# --- ENDPOINT 2: KATALOG DATABASE (FIXED INDENTATION) ---
+# --- ENDPOINT 2: KATALOG ---
 @app.get("/api/animes")
 async def get_all_animes(page: int = 1, limit: int = 12):
-    start = (page - 1) * limit
-    end = start + limit
-    
-    total_data = len(df_anime)
+    start, end = (page - 1) * limit, page * limit
     sliced_df = df_anime.iloc[start:end]
-    
     animes = []
     for i, row in sliced_df.iterrows():
-        genre_clean = row['genre']
-        if isinstance(genre_clean, str):
-            genre_clean = genre_clean.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
-            
+        genre = str(row['genre']).replace("[", "").replace("]", "").replace("'", "")
         animes.append({
-            "id": int(i),
-            "title": row['title'],
-            "score": float(row['score']),
-            "genre": genre_clean,
-            "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None,
-            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis available."
+            "id": int(i), "title": row['title'], "score": float(row['score']),
+            "genre": genre, "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None,
+            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis."
         })
-        
-    return {
-        "total": total_data,
-        "page": page,
-        "limit": limit,
-        "data": animes
-    }
+    return {"total": len(df_anime), "page": page, "data": animes}
 
 if __name__ == "__main__":
     import uvicorn
