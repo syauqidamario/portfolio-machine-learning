@@ -60,18 +60,17 @@ model, tokenizer = build_and_load_model()
 class SearchQuery(BaseModel):
     query: str
 
+# --- ENDPOINT 1: REKOMENDASI AI ---
 @app.post("/api/recommend")
 async def get_recommendations(request: SearchQuery):
     if model is None or tokenizer is None:
         return {"error": "Model belum siap"}
 
-    # 1. Prediksi Skor AI
     sequences = tokenizer.texts_to_sequences([request.query])
     padded = pad_sequences(sequences, maxlen=150) 
     prediction = model.predict(padded)
     final_score = max(0, min(float(prediction[0][0]) * 10, 10.0))
 
-    # 2. FILTER GENRE & SINONIM
     keywords = request.query.lower().split()
     synonyms = {
         "jantan": ["shounen", "action", "military", "super power"],
@@ -97,11 +96,8 @@ async def get_recommendations(request: SearchQuery):
     if df_filtered.empty:
         df_filtered = df_anime.copy()
 
-    # 3. LOGIKA RANDOMIZER (The Wildcard)
     df_filtered['diff'] = (df_filtered['score'] - final_score).abs()
     
-    # Kita ambil 30 kandidat terbaik, lalu acak 3 diantaranya
-    # Ini supaya hasil tidak kaku dan user bisa menemukan hidden gems
     candidates = (
         df_filtered.sort_values('diff')
         .drop_duplicates(subset=['title']) 
@@ -112,7 +108,6 @@ async def get_recommendations(request: SearchQuery):
 
     results = []
     for i, row in recommendations.iterrows():
-        # Merapikan tampilan genre (buang bracket dan petik)
         genre_clean = row['genre']
         if isinstance(genre_clean, str):
             genre_clean = genre_clean.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
@@ -122,13 +117,43 @@ async def get_recommendations(request: SearchQuery):
             "title": row['title'],
             "score": float(row['score']),
             "genre": genre_clean,
-            "img_url": row['img_url'], 
-            "synopsis": row['synopsis'] if isinstance(row['synopsis'], str) else "No synopsis available.",
+            "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None, 
+            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis available.",
             "ai_match": round(final_score, 2)
         })
 
-    print(f"Vibe: {request.query} | Target Score: {final_score} | Got: {[r['title'] for r in results]}")
     return results
+
+# --- ENDPOINT 2: KATALOG DATABASE (FIXED INDENTATION) ---
+@app.get("/api/animes")
+async def get_all_animes(page: int = 1, limit: int = 12):
+    start = (page - 1) * limit
+    end = start + limit
+    
+    total_data = len(df_anime)
+    sliced_df = df_anime.iloc[start:end]
+    
+    animes = []
+    for i, row in sliced_df.iterrows():
+        genre_clean = row['genre']
+        if isinstance(genre_clean, str):
+            genre_clean = genre_clean.replace("[", "").replace("]", "").replace("'", "").replace('"', "")
+            
+        animes.append({
+            "id": int(i),
+            "title": row['title'],
+            "score": float(row['score']),
+            "genre": genre_clean,
+            "img_url": str(row['img_url']) if pd.notna(row['img_url']) else None,
+            "synopsis": str(row['synopsis']) if pd.notna(row['synopsis']) else "No synopsis available."
+        })
+        
+    return {
+        "total": total_data,
+        "page": page,
+        "limit": limit,
+        "data": animes
+    }
 
 if __name__ == "__main__":
     import uvicorn
